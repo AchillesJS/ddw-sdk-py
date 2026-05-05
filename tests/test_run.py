@@ -10,10 +10,14 @@ from ddw import Config, DDWAPIError, DDWUsageError, Run
 
 
 def _ok_client(response: dict[str, Any] | None = None) -> MagicMock:
-    """A fake client matching the Client.create_run interface."""
+    """A fake client matching the Client.ingest_run interface."""
 
     c = MagicMock()
-    c.create_run.return_value = response or {"id": "run-uuid", "status": "succeeded"}
+    c.ingest_run.return_value = response or {
+        "run_id": "run-uuid",
+        "external_run_id": "sdk-test",
+        "created": True,
+    }
     return c
 
 
@@ -26,6 +30,7 @@ def _make_run(client: Any, cfg: Config, **overrides: Any) -> Run:
         metric_name="accuracy",
         config=cfg,
         client=client,
+        external_run_id="sdk-test",
     )
     defaults.update(overrides)
     return Run(**defaults)
@@ -39,16 +44,21 @@ def test_happy_path_posts_run(cfg: Config) -> None:
     with _make_run(client, cfg) as run:
         run.log_metric_final(0.87)
 
-    client.create_run.assert_called_once()
-    payload = client.create_run.call_args.args[0]
+    client.ingest_run.assert_called_once()
+    payload = client.ingest_run.call_args.args[0]
 
-    assert payload["model_tag"] == "m1"
-    assert payload["dataset_size"] == 1000.0
-    assert payload["metric_final"] == 0.87
-    assert payload["status"] == "succeeded"
-    assert payload["split"] == "val"
-    assert payload["budget_kind"] == "epochs"
-    assert run.submitted == {"id": "run-uuid", "status": "succeeded"}
+    assert payload["schema_version"] == 2
+    assert payload["external_run_id"] == "sdk-test"
+    assert payload["run"]["model_tag"] == "m1"
+    assert payload["run"]["dataset_size"] == 1000.0
+    assert payload["run"]["metric_final"] == 0.87
+    assert payload["run"]["status"] == "SUCCEEDED"
+    assert payload["run"]["split"] == "val"
+    assert payload["run"]["budget_kind"] == "epochs"
+    assert payload["metric_points"] == [
+        {"series_name": "val", "x_kind": "epoch", "x_value": 10.0, "y_value": 0.87}
+    ]
+    assert run.submitted == {"run_id": "run-uuid", "external_run_id": "sdk-test", "created": True}
 
 
 def test_payload_carries_all_optional_metadata(cfg: Config) -> None:
@@ -64,7 +74,7 @@ def test_payload_carries_all_optional_metadata(cfg: Config) -> None:
     ) as run:
         run.log_metric_final(0.5)
 
-    p = client.create_run.call_args.args[0]
+    p = client.ingest_run.call_args.args[0]["run"]
     assert p["seed"] == 42
     assert p["dataset_version"] == "v3"
     assert p["config_hash"] == "abc123"
@@ -83,7 +93,7 @@ def test_payload_property_is_readonly_view(cfg: Config) -> None:
 # ---------------- exception handling ----------------
 
 
-def test_exception_in_block_marks_failed_and_skips_post(cfg: Config) -> None:
+def test_exception_in_block_marks_failed_and_posts_if_metric_exists(cfg: Config) -> None:
     client = _ok_client()
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -91,12 +101,10 @@ def test_exception_in_block_marks_failed_and_skips_post(cfg: Config) -> None:
             run.log_metric_final(0.5)
             raise RuntimeError("boom")
 
-    # After the exception, status should have flipped to "failed",
-    # but since metric was set, run still posts.
-    client.create_run.assert_called_once()
-    p = client.create_run.call_args.args[0]
-    assert p["status"] == "failed"
-    assert p["metric_final"] == 0.5
+    client.ingest_run.assert_called_once()
+    p = client.ingest_run.call_args.args[0]
+    assert p["run"]["status"] == "FAILED"
+    assert p["run"]["metric_final"] == 0.5
 
 
 def test_exception_without_metric_skips_post(cfg: Config) -> None:
@@ -106,16 +114,16 @@ def test_exception_without_metric_skips_post(cfg: Config) -> None:
         with _make_run(client, cfg):
             raise RuntimeError("crashed before metric")
 
-    client.create_run.assert_not_called()
+    client.ingest_run.assert_not_called()
 
 
 def test_no_metric_no_exception_raises_usage(cfg: Config) -> None:
     client = _ok_client()
-    with pytest.raises(DDWUsageError, match="metric_final was never set"):
+    with pytest.raises(DDWUsageError, match="Run metric data was never set"):
         with _make_run(client, cfg):
             pass
 
-    client.create_run.assert_not_called()
+    client.ingest_run.assert_not_called()
 
 
 # ---------------- validation ----------------
@@ -184,7 +192,7 @@ def test_on_error_warn_does_not_raise_on_api_error(
     cfg: Config, caplog: pytest.LogCaptureFixture
 ) -> None:
     client = MagicMock()
-    client.create_run.side_effect = DDWAPIError(500, "boom")
+    client.ingest_run.side_effect = DDWAPIError(500, "boom")
 
     with caplog.at_level(logging.WARNING, logger="ddw.sdk"):
         with _make_run(client, cfg, on_error="warn") as run:
@@ -196,7 +204,7 @@ def test_on_error_warn_does_not_raise_on_api_error(
 
 def test_on_error_raise_propagates_api_error(cfg: Config) -> None:
     client = MagicMock()
-    client.create_run.side_effect = DDWAPIError(422, [{"loc": ["body", "x"]}])
+    client.ingest_run.side_effect = DDWAPIError(422, [{"loc": ["body", "x"]}])
 
     with pytest.raises(DDWAPIError) as ei:
         with _make_run(client, cfg) as run:
@@ -214,8 +222,8 @@ def test_set_status_can_force_failed(cfg: Config) -> None:
         run.log_metric_final(0.4)
         run.set_status("failed")
 
-    p = client.create_run.call_args.args[0]
-    assert p["status"] == "failed"
+    p = client.ingest_run.call_args.args[0]
+    assert p["run"]["status"] == "FAILED"
 
 
 def test_set_status_invalid_raises(cfg: Config) -> None:

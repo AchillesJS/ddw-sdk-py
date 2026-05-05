@@ -102,3 +102,22 @@ All tests use mocked HTTP — no DDW backend required.
 See `examples/`:
 - `basic_pytorch.py` — single training run
 - `basic_sklearn.py` — multiple runs at different dataset sizes (feeds DDW analytics)
+
+## What's new in v0.2
+
+v0.2 adds direct RunReportV2 ingestion through `POST /api/v1/runs/ingest`.
+
+New run logging methods:
+
+- `run.log_metric(series, x_kind, x_value, y_value)` for normalized time-series quality metrics in `[0, 1]`.
+- `run.log_diagnostic(series, x_kind, x_value, y_value)` for unbounded finite diagnostic signals such as loss, gradient norm, or latency.
+- `run.log_metric_final(value)` still works and is submitted as a single `val` metric point.
+
+```python
+from ddw import Run
+
+with Run(model_tag="resnet50", dataset_size=10_000, budget_kind="epochs", budget_value=3, metric_name="accuracy") as run:
+    for epoch in range(1, 4):
+        run.log_metric("val", "epoch", epoch, validate(epoch))
+        run.log_diagnostic("loss", "epoch", epoch, train_loss(epoch))
+```

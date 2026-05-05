@@ -1,6 +1,6 @@
 [project]
 name = "ddw-sdk"
-version = "0.1.0"
+version = "0.2.0"
 description = "DDW Python SDK — report ML training runs to Data Decision Workspace"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
@@ -42,3 +42,7 @@ strict = false
 warn_return_any = true
 warn_unused_ignores = true
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["httpx", "httpx.*"]
+follow_imports = "skip"

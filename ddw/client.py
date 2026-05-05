@@ -4,8 +4,8 @@ Stateless except for httpx connection pool. One Client instance per process is f
 All requests carry X-Tenant-Id header automatically.
 
 This client is a Protocol-compatible target for Run, but Run can also accept
-any object exposing `create_run(payload) -> dict[str, Any]`. This makes it
-easy to inject a fake transport in tests (see tests/test_run.py).
+any object exposing `ingest_run(payload) -> dict[str, Any]`. This makes it
+easy to inject a fake transport in tests.
 """
 
 from __future__ import annotations
@@ -49,9 +49,22 @@ class Client:
         self.close()
 
     def create_run(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """POST /api/v1/runs. Raises DDWAPIError on non-2xx."""
+        """DEPRECATED in v0.2; kept for backward compatibility. Prefer ingest_run."""
 
         r = self._http.post("/api/v1/runs", json=payload)
+        if r.status_code >= 400:
+            try:
+                detail = r.json().get("detail")
+            except Exception:
+                detail = r.text
+            raise DDWAPIError(r.status_code, detail)
+        data: dict[str, Any] = r.json()
+        return data
+
+    def ingest_run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST a RunReportV2 payload to /api/v1/runs/ingest."""
+
+        r = self._http.post("/api/v1/runs/ingest", json=payload)
         if r.status_code >= 400:
             try:
                 detail = r.json().get("detail")
@@ -66,6 +79,6 @@ class Client:
 
         try:
             r = self._http.get("/health")
-            return r.status_code == 200
+            return int(r.status_code) == 200
         except httpx.HTTPError:
             return False

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import httpx
 import pytest
 
 from ddw import Client, Config, DDWAPIError
 
 
-def _client_with_handler(handler: object) -> Client:
+def _client_with_handler(handler: Callable[[httpx.Request], httpx.Response]) -> Client:
     """Build a Client whose internal httpx uses a MockTransport handler."""
 
     cfg = Config(base_url="http://test", tenant_id="t1")
