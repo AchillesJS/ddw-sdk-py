@@ -16,6 +16,7 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
 ]
+torch = ["torch>=2.0"]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

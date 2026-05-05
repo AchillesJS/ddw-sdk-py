@@ -57,7 +57,7 @@ with Run(
     run.log_metric_final(eval_accuracy)
 ```
 
-On context exit, the run is POSTed to `DDW_BASE_URL/api/v1/runs` with `X-Tenant-Id` header.
+On context exit, v0.2 run reports are POSTed to `DDW_BASE_URL/api/v1/runs/ingest` with the `X-Tenant-Id` header.
 
 ## Production-safe usage
 
@@ -81,10 +81,9 @@ Failures are logged via the `ddw.sdk` logger (level WARNING).
 | Exit without `metric_final`, exception in block        | No POST; original exception reraised       |
 | HTTP 4xx/5xx from DDW                                  | `DDWAPIError` raised (or warned)           |
 
-## What this SDK does NOT do (v0.1)
+## What this SDK does NOT do
 
 - No background threads, no retries, no async.
-- No time-series metrics — only `metric_final`. Time-series is v0.2.
 - No model artifact upload.
 - No PyTorch/sklearn auto-instrumentation. Explicit API only.
 - No automatic git/config_hash inference. You pass them yourself.
@@ -121,3 +120,33 @@ with Run(model_tag="resnet50", dataset_size=10_000, budget_kind="epochs", budget
         run.log_metric("val", "epoch", epoch, validate(epoch))
         run.log_diagnostic("loss", "epoch", epoch, train_loss(epoch))
 ```
+
+## PyTorch helpers
+
+PyTorch helpers are optional. The base SDK still installs with only `httpx`.
+Install the optional PyTorch extra when you want framework-specific diagnostics:
+
+```bash
+pip install "ddw-sdk[torch]"
+# local editable dev install:
+pip install -e ".[torch]"
+```
+
+Helpers do not register hooks, do not mutate model or optimizer state, and do not
+auto-log anything. You explicitly compute values and pass them to
+`run.log_diagnostic(...)`.
+
+```python
+from ddw import Run
+from ddw.frameworks.pytorch import compute_grad_norm_global, get_current_lr
+
+with Run(model_tag="tiny", dataset_size=256, budget_kind="epochs", budget_value=10, metric_name="accuracy") as run:
+    for epoch in range(1, 11):
+        loss.backward()
+        run.log_diagnostic("grad_norm_global", "epoch", epoch, compute_grad_norm_global(model))
+        run.log_diagnostic("lr", "epoch", epoch, get_current_lr(optimizer))
+        optimizer.step()
+        run.log_metric("val", "epoch", epoch, val_accuracy)
+```
+
+See `examples/basic_pytorch.py` for the canonical v0.2 PyTorch reference.
