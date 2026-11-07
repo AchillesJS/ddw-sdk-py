@@ -6,7 +6,7 @@
 Рекомендуемая структура на твоей машине:
 
 ```
-C:\Users\Achilles\Desktop\
+./
 ├── data-decision-layer\       ← backend (уже есть)
 └── ddw-sdk-py\                ← новый, из этого ZIP
 ```
@@ -25,7 +25,7 @@ pip install -e ".[dev]"
 ## Прогнать тесты
 
 ```powershell
-cd C:\Users\Achilles\Desktop\ddw-sdk-py
+cd ./ddw-sdk-py
 pytest -q
 ```
 
@@ -42,7 +42,7 @@ mypy ddw
 В одном терминале — стартуй backend:
 
 ```powershell
-cd C:\Users\Achilles\Desktop\data-decision-layer
+cd ./data-decision-layer
 conda activate decision
 uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
@@ -50,7 +50,7 @@ uvicorn api.main:app --host 127.0.0.1 --port 8000
 В другом терминале — гоняй пример:
 
 ```powershell
-cd C:\Users\Achilles\Desktop\ddw-sdk-py
+cd ./ddw-sdk-py
 conda activate decision
 $env:DDW_BASE_URL = "http://127.0.0.1:8000"
 $env:DDW_TENANT_ID = "team-vision"

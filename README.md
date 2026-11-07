@@ -1,152 +1,91 @@
 # DDW Python SDK
 
-Report ML training runs to **Data Decision Workspace** from your training code in 3 lines.
+A synchronous Python client for reporting ML training evidence to [Data Decision Workspace](https://github.com/AchillesJS/data-decision-layer). **Status: MVP; package version 0.2.0.** It collects explicitly logged metrics and diagnostic signals, then submits a RunReport v2 when a `Run` context exits.
 
-## Install (local dev)
+## Install from source
 
-The SDK is not on PyPI yet. From the SDK repo root:
-
-```bash
-pip install -e .
-```
-
-This installs `ddw-sdk` in editable mode with only one runtime dependency: `httpx`.
-
-To install with dev tools (pytest, ruff, mypy):
+Requires Python 3.11 or newer. These instructions use a checkout; PyPI availability has not been independently verified.
 
 ```bash
-pip install -e ".[dev]"
+git clone https://github.com/AchillesJS/ddw-sdk-py.git
+cd ddw-sdk-py
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
 ```
 
-## Configure
+On Windows use `.venv\Scripts\Activate.ps1`. The base SDK has one runtime dependency, `httpx`.
 
-Two ways: env vars (recommended) or explicit args.
+## Minimal example
 
-```bash
-export DDW_BASE_URL=http://localhost:8000
-export DDW_TENANT_ID=team-vision
-# optional:
-export DDW_TIMEOUT_S=15
-```
-
-Or:
+Start the backend using its README first. This complete example submits synthetic input, not training results:
 
 ```python
 from ddw import Config, Run
 
-cfg = Config(base_url="http://localhost:8000", tenant_id="team-vision")
-with Run(..., config=cfg) as run:
-    ...
-```
-
-## Use
-
-```python
-from ddw import Run
-
+config = Config(base_url="http://127.0.0.1:8000", tenant_id="portfolio-demo")
 with Run(
-    model_tag="resnet50",
-    dataset_size=10_000,
-    budget_kind="epochs",       # "steps" | "epochs" | "time_sec"
-    budget_value=10,
+    model_tag="synthetic-baseline",
+    dataset_size=100,
+    budget_kind="epochs",
+    budget_value=1,
     metric_name="accuracy",
-    split="val",                # default "val"
-    seed=42,                    # optional but recommended
+    config=config,
 ) as run:
-    model = train(...)
-    run.log_metric_final(eval_accuracy)
+    run.log_metric("val", "epoch", 1, 0.75)
+    run.log_diagnostic("loss_train", "epoch", 1, 0.5)
+print(run.submitted)
 ```
 
-On context exit, v0.2 run reports are POSTed to `DDW_BASE_URL/api/v1/runs/ingest` with the `X-Tenant-Id` header.
+`log_metric_final(0.75)` can replace the time-series metric call; it creates a single `val` point if no metric points exist. Metric values must be in `[0, 1]`; diagnostic values must be finite. Coordinates must increase strictly within each series and coordinate kind.
 
-## Production-safe usage
+## Configuration
 
-In real training scripts, set `on_error="warn"` so DDW reporting failures
-never crash your training:
+Pass `Config` directly or omit it to resolve environment variables:
 
-```python
-with Run(..., on_error="warn") as run:
-    ...
-```
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `DDW_BASE_URL` | Backend base URL | Required |
+| `DDW_TENANT_ID` | Sent as `X-Tenant-Id` | Required |
+| `DDW_TIMEOUT_S` | HTTP timeout in seconds | `15.0` |
 
-Failures are logged via the `ddw.sdk` logger (level WARNING).
+`Config.from_env_or_args(...)` gives explicit arguments precedence over environment variables. Direct `Config(...)` construction does not read the environment. Tenant headers are routing identifiers, not authentication credentials.
 
-## Behaviour reference
+## Backend compatibility
 
-| Situation                                              | Behaviour                                  |
-| ------------------------------------------------------ | ------------------------------------------ |
-| Exit with `metric_final` set, no exception             | Status `succeeded`, run POSTed             |
-| Exit with `metric_final` set, exception in block       | Status `failed`, run POSTed; exc reraised  |
-| Exit without `metric_final`, no exception              | `DDWUsageError` raised                     |
-| Exit without `metric_final`, exception in block        | No POST; original exception reraised       |
-| HTTP 4xx/5xx from DDW                                  | `DDWAPIError` raised (or warned)           |
+`Run` sends `schema_version: 2` to `POST /api/v1/runs/ingest`. The audited backend revision is [4ea325e](https://github.com/AchillesJS/data-decision-layer/commit/4ea325ec92e5d17cb605df0f657f58419869f5a4); no minimum released backend version is established. API `/api/v1` and report schema v2 are separate version concepts.
 
-## What this SDK does NOT do
+Use at least one `val` metric series and metric `x_kind` of `epoch`, `step`, or `time` for compatibility. The SDK accepts some inputs that backend validation rejects, including unsupported metric coordinate kinds and reports without a `val` point. The deprecated `Client.create_run` remains available; `Client.ingest_run` is the current submission path. `Client.health()` returns false on HTTP transport failure or a non-200 health response.
 
-- No background threads, no retries, no async.
-- No model artifact upload.
-- No PyTorch/sklearn auto-instrumentation. Explicit API only.
-- No automatic git/config_hash inference. You pass them yourself.
+## Error behavior
 
-## Tests
+- Missing configuration raises `DDWConfigError`; invalid logging input raises `DDWUsageError`. A malformed timeout environment value can raise `ValueError`.
+- HTTP error responses raise `DDWAPIError`, exposing `status_code` and `detail`. Transport errors from httpx propagate directly.
+- `on_error="warn"` logs report-building usage errors and API response errors via `ddw.sdk`; it does **not** suppress network/timeout errors or errors raised by logging calls inside the context.
+- A block exception marks a report failed if metric data exists. Without metric data, it propagates without submission. A reporting exception can supersede a training exception in raise mode.
+- Successful context exit without metric data raises `DDWUsageError` by default. Submission occurs synchronously at exit; there are no retries or background uploads.
+
+## Optional PyTorch helpers
 
 ```bash
-pytest -q
+python -m pip install -e '.[torch]'
 ```
 
-All tests use mocked HTTP — no DDW backend required.
+`ddw.frameworks.pytorch` provides explicit diagnostics such as `compute_grad_norm_global(model)` and `get_current_lr(optimizer)`. Compute gradient norms after backpropagation and log the returned values yourself. Helpers do not install hooks or automatically upload metrics. See [PyTorch example](examples/basic_pytorch.py); it uses synthetic training data. The [multi-run example](examples/basic_sklearn.py) illustrates reporting across dataset sizes; inspect its requirements before running it.
 
-## Examples
-
-See `examples/`:
-- `basic_pytorch.py` — single training run
-- `basic_sklearn.py` — multiple runs at different dataset sizes (feeds DDW analytics)
-
-## What's new in v0.2
-
-v0.2 adds direct RunReportV2 ingestion through `POST /api/v1/runs/ingest`.
-
-New run logging methods:
-
-- `run.log_metric(series, x_kind, x_value, y_value)` for normalized time-series quality metrics in `[0, 1]`.
-- `run.log_diagnostic(series, x_kind, x_value, y_value)` for unbounded finite diagnostic signals such as loss, gradient norm, or latency.
-- `run.log_metric_final(value)` still works and is submitted as a single `val` metric point.
-
-```python
-from ddw import Run
-
-with Run(model_tag="resnet50", dataset_size=10_000, budget_kind="epochs", budget_value=3, metric_name="accuracy") as run:
-    for epoch in range(1, 4):
-        run.log_metric("val", "epoch", epoch, validate(epoch))
-        run.log_diagnostic("loss", "epoch", epoch, train_loss(epoch))
-```
-
-## PyTorch helpers
-
-PyTorch helpers are optional. The base SDK still installs with only `httpx`.
-Install the optional PyTorch extra when you want framework-specific diagnostics:
+## Development
 
 ```bash
-pip install "ddw-sdk[torch]"
-# local editable dev install:
-pip install -e ".[torch]"
+python -m pip install -e '.[dev]'
+python -m pytest -q
+python -m ruff check .
+python -m mypy ddw
 ```
 
-Helpers do not register hooks, do not mutate model or optimizer state, and do not
-auto-log anything. You explicitly compute values and pass them to
-`run.log_diagnostic(...)`.
+Tests use fake/mocked transports and do not require a live backend. PyTorch-dependent tests skip when torch is absent. Install `.[dev,torch]` to run those tests. See [contribution guidance](CONTRIBUTING.md).
 
-```python
-from ddw import Run
-from ddw.frameworks.pytorch import compute_grad_norm_global, get_current_lr
+## Limitations and licensing
 
-with Run(model_tag="tiny", dataset_size=256, budget_kind="epochs", budget_value=10, metric_name="accuracy") as run:
-    for epoch in range(1, 11):
-        loss.backward()
-        run.log_diagnostic("grad_norm_global", "epoch", epoch, compute_grad_norm_global(model))
-        run.log_diagnostic("lr", "epoch", epoch, get_current_lr(optimizer))
-        optimizer.step()
-        run.log_metric("val", "epoch", epoch, val_accuracy)
-```
+No async API, retry queue, model artifact upload, automatic training instrumentation, or automatic git/config-hash inference is implemented. The SDK reports evidence; backend analysis and decision records live in DDW. No production reliability or benchmark claims are made.
 
-See `examples/basic_pytorch.py` for the canonical v0.2 PyTorch reference.
+`pyproject.toml` declares `Proprietary`; no LICENSE file is present. This audit preserves those terms. Public visibility does not establish an open-source license.
